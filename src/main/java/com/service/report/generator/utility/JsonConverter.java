@@ -2,6 +2,7 @@ package com.service.report.generator.utility;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.service.report.generator.exception.InvalidDataException;
 import lombok.RequiredArgsConstructor;
@@ -46,5 +47,28 @@ public class JsonConverter {
         if (null == map) return Collections.emptyMap();
         else return map;
     }
+
+
+
+    public <K, V> Map<K, V> getMapFromJsonString(String jsonString, Class<K> keyClass, TypeReference<V> valueTypeRef) {
+        Map<K, V> map;
+        try {
+            map = convertToMap(jsonString, keyClass, valueTypeRef);
+        } catch (IOException e) {
+            throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
+        }
+
+        if (map == null) return Collections.emptyMap();
+        else return map;
+    }
+
+    public <K, V> Map<K, V> convertToMap(String json, Class<K> keyClass, TypeReference<V> valueTypeRef) throws IOException {
+        // Use TypeReference to get the Type of Map<K, V>
+        JavaType mapType = objectMapper.getTypeFactory().constructMapType(Map.class, keyClass, (Class<?>) valueTypeRef.getType());
+
+        return objectMapper.readValue(json, mapType);
+    }
+
+
 
 }

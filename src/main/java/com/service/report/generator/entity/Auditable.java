@@ -29,4 +29,25 @@ public abstract class Auditable {
     @LastModifiedDate
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    @ManyToOne(
+            fetch = FetchType.LAZY,
+            cascade = {
+                    CascadeType.MERGE,
+                    CascadeType.REFRESH
+            }
+    )
+    @JoinColumn(name = "created_by")
+    private UserModel createdBy;
+
+    @ManyToOne(
+            fetch = FetchType.LAZY,
+            cascade = {
+                    CascadeType.MERGE,
+                    CascadeType.REFRESH
+            }
+    )
+    @JoinColumn(name = "updated_by")
+    private UserModel lastModifiedBy;
+
 }

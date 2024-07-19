@@ -19,13 +19,18 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "job")
+@Table(name = "job",
+        indexes = @Index(name = "idx_job_uid", columnList = "job_uid")
+)
 public class JobModel extends Auditable{
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "job_id")
     private Long id;
+
+    @Column(name = "job_uid", unique = true, nullable = false)
+    private String jobUid;
 
     @Column(name = "job_name", nullable = false)
     private String name;

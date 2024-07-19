@@ -4,6 +4,7 @@ package com.service.report.generator.controller;
 import com.service.report.generator.annotation.Auditor;
 import com.service.report.generator.dto.APIResponse;
 import com.service.report.generator.dto.JwtTokenResponse;
+import com.service.report.generator.dto.TokenValidationResponse;
 import com.service.report.generator.dto.payload.LoginRequest;
 import com.service.report.generator.service.ReportGeneratorService;
 import com.service.report.generator.tag.UserRole;
@@ -31,9 +32,10 @@ public class ReportGeneratorController {
     public ResponseEntity<?> uploadFile(
             @RequestParam(name = "main", required = false) MultipartFile mainfile,
             @RequestParam(name = "ref-1", required = false) MultipartFile reference1,
-            @RequestParam(name = "ref-2", required = false) MultipartFile reference2
+            @RequestParam(name = "ref-2", required = false) MultipartFile reference2,
+            TokenValidationResponse validationResponse
     ){
-        APIResponse<?> response = reportGeneratorService.uploadFile(mainfile,reference1,reference2);
+        APIResponse<?> response = reportGeneratorService.uploadFile(mainfile,reference1,reference2, validationResponse);
 
         return new ResponseEntity<>(
                 response,
@@ -44,6 +46,19 @@ public class ReportGeneratorController {
 
 
 
+
+    @PostMapping(path = "/execute/{jobUid}")
+    @Auditor(allowedRoles = UserRole.ADMIN)
+    public ResponseEntity<?> triggerReportGeneration(
+            @PathVariable(value = "jobUid") String jobUid
+    ){
+        APIResponse<?> response = reportGeneratorService.triggerReportGeneration(jobUid);
+
+        return new ResponseEntity<>(
+                response,
+                HttpStatus.OK
+        );
+    }
 
 
 

@@ -1,13 +1,11 @@
 package com.service.report.generator.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.service.report.generator.dto.FileDataDTO;
-import com.service.report.generator.dto.JwtTokenResponse;
+import com.service.report.generator.dto.*;
 import com.service.report.generator.dto.payload.LoginRequest;
 import com.service.report.generator.entity.*;
 import com.service.report.generator.exception.BadCredentialsException;
 import com.service.report.generator.repository.*;
-import com.service.report.generator.dto.APIResponse;
 import com.service.report.generator.exception.InvalidDataException;
 import com.service.report.generator.tag.*;
 import com.service.report.generator.utility.FileUtils;
@@ -18,6 +16,10 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -27,6 +29,10 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.*;
@@ -61,7 +67,8 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     @Value("${app.upload.dir.doc}")
     private String documentDirectory;
 
-
+    @Value("${app.upload.dir.out}")
+    private String outputDirectory;
 
 
     /**
@@ -148,6 +155,32 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     }
 
 
+
+    public String generateJobUid() {
+        // Generate the prefix using the current date-time in a specific format
+        String prefix = "J" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMdd"));
+        String jobUID;
+        boolean existsInDatabase;
+        int attempts = 0;
+        do {
+            // Generate a random UUID suffix and combine it with the prefix to create the UID
+            String uuid = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 4);
+            jobUID = prefix + uuid;
+            // Check if the generated UID already exists in the database
+            existsInDatabase = jobRepository.existsByJobUid(jobUID);
+            attempts++;
+        } while (existsInDatabase && attempts <= 100);
+
+        // If the generated UID still exists after 100 attempts, throw an exception
+        if (existsInDatabase) {
+            throw new InvalidDataException("Failed to execute current task.Try again");
+        }
+
+        return jobUID;
+    }
+
+
+
     public static String formattedNOW() {
         return Instant.now()
                 .atZone(ZoneId.systemDefault())
@@ -160,11 +193,14 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     public APIResponse<?> uploadFile(
             MultipartFile mainfile,
             MultipartFile reference1,
-            MultipartFile reference2
+            MultipartFile reference2,
+            TokenValidationResponse validationResponse
     ) {
 
         if(null == mainfile || mainfile.isEmpty())
             throw new InvalidDataException("To proceed, provide with a input file");
+
+        Optional<UserModel> loggedInUser = userRepository.findById(validationResponse.getPid());
 
         boolean isReference1Present = null != reference1 && !reference1.isEmpty();
         boolean isReference2Present = null != reference2 && !reference2.isEmpty();
@@ -211,12 +247,12 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
             case CSV -> {
 
-                Map<FileType, List<Long>> fileMap = new LinkedHashMap<>();
+                Map<FileType, ListDTO> fileMap = new LinkedHashMap<>();
 
                 // Adding main file ID to the map
                 List<Long> mainFileIdList = new ArrayList<>();
                 mainFileIdList.add(mainFileDTO.getFileDataModel().getFileId());
-                fileMap.put(FileType.MAIN, mainFileIdList);
+                fileMap.put(FileType.MAIN, ListDTO.builder().id(mainFileIdList).build());
 
                 // Adding reference file IDs to the map
                 List<Long> referenceFileIdList = new ArrayList<>();
@@ -227,9 +263,9 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                     referenceFileIdList.add(reference2DTO.getFileDataModel().getFileId());
 
                 if(!referenceFileIdList.isEmpty())
-                    fileMap.put(FileType.REFERENCE, referenceFileIdList);
+                    fileMap.put(FileType.REFERENCE,  ListDTO.builder().id(referenceFileIdList).build());
 
-                scheduleJobForReportGeneration(fileMap);
+                scheduleJobForReportGeneration(fileMap, loggedInUser.get());
 
                 return APIResponse.builder()
                         .message("Files successfully uploaded.")
@@ -243,6 +279,128 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .build();
 
     }
+
+
+
+    @Override
+    public APIResponse<?> triggerReportGeneration(
+            String jobId
+    ) {
+
+        JobModel jobModel = jobRepository.findByJobUid(jobId);
+        if(null == jobModel)
+            throw new InvalidDataException("Job not found for given ID, double-check and try again");
+
+
+        executeReportGeneration(jobModel);
+
+
+        return null;
+    }
+
+
+
+
+    private void executeReportGeneration(
+            JobModel jobModel
+    ){
+
+        String jobData = jobModel.getJsonData();
+
+        Map<FileType, ListDTO> jobDataMap = jsonConverter.getMapFromJsonString(jobData, FileType.class, ListDTO.class);
+
+        ListDTO mainListDTO = jobDataMap.get(FileType.MAIN);
+        Optional<FileDataModel> mainFileDataModel = fileDataRepository.findById(mainListDTO.getId().get(0));
+
+        Optional<FileDataModel> referenceFile1 = Optional.empty();
+        Optional<FileDataModel> referenceFile2 = Optional.empty();
+        ListDTO referenceListDTO =  jobDataMap.get(FileType.REFERENCE);
+        if(null != referenceListDTO) {
+
+            List<Long> referenceFileID = referenceListDTO.getId();
+            referenceFile1 = fileDataRepository.findById(referenceFileID.get(0));
+
+            if(1 < referenceFileID.size())
+                referenceFile2 = fileDataRepository.findById(referenceFileID.get(1));
+        }
+
+
+        try {
+            // Load reference files into maps
+            Map<String, CSVRecord> ref1Map = loadReferenceFile(referenceFile1.get().getFilePath(), "NationalIdentifier");
+            Map<String, CSVRecord> ref2Map = loadReferenceFile(referenceFile2.get().getFilePath(), "NationalIdentifier");
+
+            // Process the main file and write the output
+            processMainFile(mainFileDataModel.get().getFilePath(), ref1Map, ref2Map, outputDirectory);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+
+
+    }
+
+
+
+    private static Map<String, CSVRecord> loadReferenceFile(String filePath, String idColumnName) throws IOException {
+        Map<String, CSVRecord> map = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            CSVFormat format = CSVFormat.DEFAULT.builder()
+                    .setHeader() // Indicates the first record should be used as headers
+                    .setSkipHeaderRecord(true) // Skip the header record while reading data
+                    .build();
+            try (CSVParser parser = new CSVParser(reader, format)) {
+                for (CSVRecord record : parser) {
+                    String id = record.get(idColumnName);
+                    map.put(id, record);
+                }
+            }
+        }
+        return map;
+    }
+
+
+
+    private static void processMainFile(String mainFilePath, Map<String, CSVRecord> ref1Map, Map<String, CSVRecord> ref2Map, String outputFilePath) throws IOException {
+        try (BufferedReader mainReader = new BufferedReader(new FileReader(mainFilePath))) {
+            CSVFormat format = CSVFormat.DEFAULT.builder()
+                    .setHeader() // Indicates the first record should be used as headers
+                    .setSkipHeaderRecord(true) // Skip the header record while reading data
+                    .build();
+            try (CSVParser mainParser = new CSVParser(mainReader, format);
+                 CSVPrinter outputPrinter = new CSVPrinter(new FileWriter(outputFilePath),
+                         CSVFormat.DEFAULT.builder()
+                                 .setHeader("FullName", "Percentage") // Set headers for the output file
+                                 .build())) {
+
+                for (CSVRecord mainRecord : mainParser) {
+                    String id = mainRecord.get("NationalIdentifier");
+                    CSVRecord ref1Record = ref1Map.get(id);
+                    CSVRecord ref2Record = ref2Map.get(id);
+
+                    if (ref1Record != null && ref2Record != null) {
+                        String column1 = mainRecord.get("FirstName");
+                        String column2 = ref1Record.get("Gender");
+//                        String column4 = ref2Record.get("Column4");
+
+                        // Compute OutputField1
+                        String outputField1 = column1 + column2;
+
+                        // Compute OutputField2
+                        double mainColumn3 = Double.parseDouble(mainRecord.get("Age"));
+                        double ref1Column1 = Double.parseDouble(ref1Record.get("Height"));
+                        double ref2Column2 = Double.parseDouble(ref2Record.get("TaxRate"));
+                        double outputField2 = (mainColumn3 * ref1Column1) / ref2Column2;
+
+                        // Write to output file
+                        outputPrinter.printRecord(outputField1, (int) outputField2);
+                    }
+                }
+            }
+        }
+    }
+
+
 
 
 
@@ -280,7 +438,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
      * @param fileMap the map containing the FileType and their id respectively
      * @throws NullPointerException if the fileMap is null
      */
-    private void scheduleJobForReportGeneration(Map<FileType, List<Long>> fileMap){
+    private void scheduleJobForReportGeneration(
+            Map<FileType, ListDTO> fileMap,
+            UserModel userModel
+    ){
 
         // Ensure that the response is not null
         Objects.requireNonNull(fileMap);
@@ -300,6 +461,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         // Build the JobModel object
         JobModel job = JobModel.builder()
+                .jobUid(generateJobUid())
                 .name(JOB_NAME)
                 .description(JOB_DESCRIPTION)
                 .attempts(0)
@@ -308,6 +470,8 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .executeAt(scheduleInstant)
                 .jobType(JobType.REPORT_GENERATOR)
                 .jsonData(jobData)
+                .createdBy(userModel)
+                .lastModifiedBy(userModel)
                 .build();
 
         // Schedule the job using the job scheduler
