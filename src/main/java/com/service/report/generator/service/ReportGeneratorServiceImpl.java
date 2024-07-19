@@ -108,7 +108,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                             .email("default@gmail.com")
                             .password(passwordEncoder.encode("Default@123"))
                             .tokenAt(Instant.now())
-                            .userRoles(List.of(userRoleRepository.findById(1L).get()))
+                            .userRoles(List.of(userRoleRepository.findById(2L).get()))
                             .build()
             );
         }

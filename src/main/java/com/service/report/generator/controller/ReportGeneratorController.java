@@ -43,6 +43,13 @@ public class ReportGeneratorController {
 
 
 
+
+
+
+
+
+
+
     /**
      * Sign in a user by validating the provided login credentials and generating a JWT token for authentication.
      *
@@ -65,6 +72,7 @@ public class ReportGeneratorController {
                 .status(HttpStatus.OK)
                 .body(response);
     }
+
 
 
 
