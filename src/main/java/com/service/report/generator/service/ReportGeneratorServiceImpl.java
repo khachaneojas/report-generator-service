@@ -2,22 +2,25 @@ package com.service.report.generator.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.service.report.generator.dto.FileDataDTO;
-import com.service.report.generator.entity.JobModel;
-import com.service.report.generator.entity.JobScheduleTimingModel;
-import com.service.report.generator.repository.FileDataRepository;
+import com.service.report.generator.dto.JwtTokenResponse;
+import com.service.report.generator.dto.payload.LoginRequest;
+import com.service.report.generator.entity.*;
+import com.service.report.generator.exception.BadCredentialsException;
+import com.service.report.generator.repository.*;
 import com.service.report.generator.dto.APIResponse;
-import com.service.report.generator.entity.FileDataModel;
 import com.service.report.generator.exception.InvalidDataException;
-import com.service.report.generator.repository.JobRepository;
-import com.service.report.generator.repository.JobScheduleTimingRepository;
 import com.service.report.generator.tag.*;
 import com.service.report.generator.utility.FileUtils;
 import com.service.report.generator.utility.JsonConverter;
+import com.service.report.generator.utility.JwtWizard;
 import com.service.report.generator.utility.TextHelper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -29,8 +32,11 @@ import java.nio.file.Paths;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
@@ -40,11 +46,17 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     private final JobScheduleTimingRepository jobScheduleTimingRepository;
     private final JsonConverter jsonConverter;
     private final JobRepository jobRepository;
+    private final JobProcessor jobProcessor;
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtWizard jwtUtils;
+    private final UserRoleRepository userRoleRepository;
 
     private static final String ERROR_GENERIC_MESSAGE = "Oops! Something went wrong.";
     private static final String JOB_NAME = "Report Generation";
     private static final String JOB_DESCRIPTION = "This job is intended to generate a report using certain transformation rules for the specified files";
     private static final long MAX_TOTAL_FILES_SIZE = 3072L * 1024L * 1024L;
+    private final AtomicBoolean isJobProcessing = new AtomicBoolean(false);
 
     @Value("${app.upload.dir.doc}")
     private String documentDirectory;
@@ -76,9 +88,64 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             );
         }
 
+        if(0 == userRoleRepository.count()){
+
+            List<UserRole> userRoles = List.of(UserRole.DEFAULT, UserRole.ADMIN);
+
+            List<UserRoleModel> userRoleModels = userRoles.stream()
+                    .map(role -> UserRoleModel.builder()
+                            .role(role)
+                            .build()
+                    ).collect(Collectors.toCollection(ArrayList::new));
+
+            userRoleRepository.saveAll(userRoleModels);
+        }
+
+        if(0 == userRepository.count()){
+            userRepository.save(
+                    UserModel.builder()
+                            .userUid(generateUserUid())
+                            .email("default@gmail.com")
+                            .password(passwordEncoder.encode("Default@123"))
+                            .tokenAt(Instant.now())
+                            .userRoles(List.of(userRoleRepository.findById(1L).get()))
+                            .build()
+            );
+        }
+
     }
 
 
+
+    /**
+     * Generates a unique user UID based on the current date and a random UUID suffix.
+     * The method ensures that the generated UID does not already exist in the database.
+     *
+     * @return A unique user UID.
+     * @throws InvalidDataException If the method fails to generate a unique UID after 100 attempts.
+     */
+    public String generateUserUid() {
+        // Generate the prefix using the current date-time in a specific format
+        String prefix = "U" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMdd"));
+        String userUID;
+        boolean existsInDatabase;
+        int attempts = 0;
+        do {
+            // Generate a random UUID suffix and combine it with the prefix to create the UID
+            String uuid = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 4);
+            userUID = prefix + uuid;
+            // Check if the generated UID already exists in the database
+            existsInDatabase = userRepository.existsByUserUid(userUID);
+            attempts++;
+        } while (existsInDatabase && attempts <= 100);
+
+        // If the generated UID still exists after 100 attempts, throw an exception
+        if (existsInDatabase) {
+            throw new InvalidDataException("Failed to execute current task.Try again");
+        }
+
+        return userUID;
+    }
 
 
     public static String formattedNOW() {
@@ -175,6 +242,33 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .message("Currently we only serve csv files")
                 .build();
 
+    }
+
+
+
+    @Override
+    public JwtTokenResponse signInUser(
+            LoginRequest loginRequest
+    ) {
+        // Sanitize input parameters
+        String email = textHelper.sanitize(loginRequest.getEmail());
+        String password = textHelper.sanitize(loginRequest.getPassword());
+
+        // Retrieve user model by email or user UID
+        UserModel userModel = userRepository.findByEmail(email);
+        // Check if the user exists and the password matches
+        if (null == userModel || !passwordEncoder.matches(password, userModel.getPassword()))
+            throw new BadCredentialsException();
+
+        // Generate JWT token for the user
+        return JwtTokenResponse.builder()
+                .token(
+                        jwtUtils.issueToken(
+                                userModel.getUserUid(),
+                                userModel.getTokenAt().toEpochMilli()
+                        )
+                )
+                .build();
     }
 
 
@@ -357,6 +451,48 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         throw new InvalidDataException("Invalid file found.");
     }
+
+
+
+    /**
+     * Automatically adds jobs to RabbitMQ for processing at a fixed delay interval.
+     * This method is scheduled to run every 60 seconds with an initial delay of 60 seconds.
+     */
+    @Scheduled(fixedDelay = 90_000, initialDelay = 60_000)
+    public void autoPublishJobsInQueue() {
+        if (isJobProcessing.compareAndSet(false, true)) {
+            try {
+//                log.info("Resolving job-queue via schedule.");
+                publishJobsInQueue();
+            } finally {
+                isJobProcessing.set(false);
+            }
+        }
+    }
+
+
+
+
+
+    /**
+     * Adds jobs to RabbitMQ for processing.
+     * This method retrieves jobs from the database and adds them to the RabbitMQ queue based on their status and schedule.
+     */
+    private void publishJobsInQueue() {
+
+        jobRepository.findAll()
+                .stream()
+                .filter(model -> !Arrays.asList(JobStatus.RUNNING, JobStatus.NO_INSTANCE, JobStatus.SUCCESS).contains(model.getStatus())
+                        && jobProcessor.isJobAttemptsNotExceeded(model.getAttempts())
+                )
+                .filter(jobProcessor::isJobReadyToRun)
+                .map(jobProcessor::enqueueJob)
+                .filter(Objects::nonNull)
+                .forEach(job -> log.info("Added Job ({}) in the queue. [{}]", job.getLeft(), job.getRight()));
+
+    }
+
+
 
 
 
