@@ -7,12 +7,13 @@ import lombok.Getter;
 @AllArgsConstructor
 public enum FieldName {
 
-    OUTFIELD1(0),
-    OUTFIELD2(1),
-    OUTFIELD3(2),
-    OUTFIELD4(3),
-    OUTFIELD5(4),
-    OUTFIELD6(5);
+    OUTFIELD1(1),
+    OUTFIELD2(2),
+    OUTFIELD3(3),
+    OUTFIELD4(4),
+    OUTFIELD5(5),
+    OUTFIELD6(6),
+    OUTFIELD7(7);
 
     private final int value;
 

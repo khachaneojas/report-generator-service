@@ -7,9 +7,11 @@ import lombok.Getter;
 @AllArgsConstructor
 public enum OperationType {
 
-    STRING(0),
-    MATHEMATICAL(1),
-    FUNCTION(2);
+    DEFAULT(0),
+    SPACE_BETWEEN(1),
+    COMMA_SEPARATED(2),
+    MATHEMATICAL(3),
+    FUNCTION(4);
     private final int value;
 
 }

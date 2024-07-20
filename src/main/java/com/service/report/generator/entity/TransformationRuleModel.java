@@ -35,4 +35,8 @@ public class TransformationRuleModel {
     @Column(name = "tfm_field", nullable = false)
     private FieldName fieldName;
 
+    @Column(name = "tfm_col_name", nullable = false)
+    private String columnName;
+
+
 }

@@ -12,4 +12,6 @@ public interface ReportGeneratorService {
     APIResponse<?> triggerReportGeneration(String jobId);
 
     JwtTokenResponse signInUser(LoginRequest loginRequest);
+
+    APIResponse<?> test();
 }

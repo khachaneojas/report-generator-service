@@ -1,5 +1,6 @@
 package com.service.report.generator.service;
 
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.service.report.generator.dto.*;
 import com.service.report.generator.dto.payload.LoginRequest;
@@ -33,12 +34,15 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -57,6 +61,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     private final PasswordEncoder passwordEncoder;
     private final JwtWizard jwtUtils;
     private final UserRoleRepository userRoleRepository;
+    private final TransformationRuleRepository transformationRuleRepository;
 
     private static final String ERROR_GENERIC_MESSAGE = "Oops! Something went wrong.";
     private static final String JOB_NAME = "Report Generation";
@@ -82,8 +87,11 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             propagation = Propagation.REQUIRED
     )
     public void init() {
+
         // Ensure the existence of the document directory.
         fileUtils.ensureDirectoryExists(documentDirectory);
+        fileUtils.ensureDirectoryExists(outputDirectory);
+
 
         // Ensure the existense of required schedule time for scheduling a report generation job
         if(0 == jobScheduleTimingRepository.count()){
@@ -120,7 +128,129 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             );
         }
 
+        if(0 == transformationRuleRepository.count()) {
+
+            Map<Integer, RuleDTO> ruleForField1Map = new LinkedHashMap<>(){{
+            put(0,RuleDTO.builder().id(1).col(0).build());
+            put(1,RuleDTO.builder().id(1).col(1).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField2Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(1).col(2).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField3Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(2).col(0).build());
+                put(1,RuleDTO.builder().id(2).col(1).build());
+                put(2,RuleDTO.builder().id(1).col(3).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField4Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(2).col(3).build());
+                put(1,RuleDTO.builder().id(2).col(2).build());
+                put(2,RuleDTO.builder().id(2).col(2).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField5Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(3).col(0).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField6Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(3).col(1).build());
+                put(1,RuleDTO.builder().id(3).col(0).build());
+            }};
+
+            Map<Integer, RuleDTO> ruleForField7Map = new LinkedHashMap<>(){{
+                put(0,RuleDTO.builder().id(1).col(4).build());
+            }};
+
+            String field1Data, field2Data, field3Data, field4Data, field5Data, field6Data, field7Data;
+            try {
+                field1Data = jsonConverter.convertMapToJsonString(ruleForField1Map);
+                field2Data = jsonConverter.convertMapToJsonString(ruleForField2Map);
+                field3Data = jsonConverter.convertMapToJsonString(ruleForField3Map);
+                field4Data = jsonConverter.convertMapToJsonString(ruleForField4Map);
+                field5Data = jsonConverter.convertMapToJsonString(ruleForField5Map);
+                field6Data = jsonConverter.convertMapToJsonString(ruleForField6Map);
+                field7Data = jsonConverter.convertMapToJsonString(ruleForField7Map);
+            } catch (JsonProcessingException e) {
+                throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
+            }
+
+            List<TransformationRuleModel> transformationRules = List.of(
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD1)
+                            .columnName("FullName")
+                            .operationType(OperationType.SPACE_BETWEEN)
+                            .transformationExpression("0,1")
+                            .transformationData(field1Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD2)
+                            .columnName("Address")
+                            .operationType(OperationType.DEFAULT)
+                            .transformationExpression("0")
+                            .transformationData(field2Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD3)
+                            .columnName("MaritalStatus")
+                            .operationType(OperationType.COMMA_SEPARATED)
+                            .transformationExpression("0,1,2")
+                            .transformationData(field3Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD4)
+                            .columnName("BMI")
+                            .operationType(OperationType.MATHEMATICAL)
+                            .transformationExpression("<>>>0<<<> / <>>>1<<<> * <>>>2<<<>")
+                            .transformationData(field4Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD5)
+                            .columnName("AnnualIncome")
+                            .operationType(OperationType.MATHEMATICAL)
+                            .transformationExpression("<>>>0<<<> * 12")
+                            .transformationData(field5Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD6)
+                            .columnName("TaxPaid")
+                            .operationType(OperationType.MATHEMATICAL)
+                            .transformationExpression("<>>>0<<<> * <>>>1<<<> * 12")
+                            .transformationData(field6Data)
+                            .build(),
+                    TransformationRuleModel.builder()
+                            .fieldName(FieldName.OUTFIELD7)
+                            .columnName("NationalIdentifier")
+                            .operationType(OperationType.DEFAULT)
+                            .transformationExpression("<>>>0<<<>")
+                            .transformationData(field7Data)
+                            .build()
+            );
+
+            transformationRuleRepository.saveAll(transformationRules);
+
+        }
+
+
     }
+
+
+    public static List<Long> extractNumbersAsLong(String expression) {
+        List<Long> numbers = new ArrayList<>();
+        // Regular expression to find numbers enclosed in <>>> and <>>>
+        Pattern pattern = Pattern.compile("<>>>(\\d+)<<<>");
+        Matcher matcher = pattern.matcher(expression);
+
+        while (matcher.find()) {
+            // Convert the extracted string to Long and add to the list
+            numbers.add(Long.parseLong(matcher.group(1)));
+        }
+
+        return numbers;
+    }
+
 
 
 
@@ -287,24 +417,23 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             String jobId
     ) {
 
-        JobModel jobModel = jobRepository.findByJobUid(jobId);
-        if(null == jobModel)
+        Optional<JobModel> jobModel = jobRepository.findByJobUid(jobId);
+        if(jobModel.isEmpty())
             throw new InvalidDataException("Job not found for given ID, double-check and try again");
 
+        String outputFileName = executeReportGeneration(jobModel.get());
 
-        executeReportGeneration(jobModel);
-
-
-        return null;
+        return APIResponse.builder()
+                .message("Transformation completed successfully. The output file ("+outputFileName+") has been created.")
+                .build();
     }
 
 
 
 
-    private void executeReportGeneration(
+    private String executeReportGeneration(
             JobModel jobModel
     ){
-
         String jobData = jobModel.getJsonData();
 
         Map<FileType, ListDTO> jobDataMap = jsonConverter.getMapFromJsonString(jobData, FileType.class, ListDTO.class);
@@ -324,25 +453,34 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 referenceFile2 = fileDataRepository.findById(referenceFileID.get(1));
         }
 
-
+        String outputFileName;
         try {
             // Load reference files into maps
             Map<String, CSVRecord> ref1Map = loadReferenceFile(referenceFile1.get().getFilePath(), "NationalIdentifier");
             Map<String, CSVRecord> ref2Map = loadReferenceFile(referenceFile2.get().getFilePath(), "NationalIdentifier");
 
             // Process the main file and write the output
-            processMainFile(mainFileDataModel.get().getFilePath(), ref1Map, ref2Map, outputDirectory);
+            outputFileName = processMainFile(
+                    mainFileDataModel.get().getFilePath(),
+                    ref1Map,
+                    ref2Map,
+                    outputDirectory
+            );
+
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new InvalidDataException("File processing failed.");
         }
 
-
-
+        return outputFileName;
     }
 
 
 
-    private static Map<String, CSVRecord> loadReferenceFile(String filePath, String idColumnName) throws IOException {
+    private static Map<String, CSVRecord> loadReferenceFile(
+            String filePath,
+            String idColumnName
+    ) throws IOException {
+
         Map<String, CSVRecord> map = new HashMap<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
             CSVFormat format = CSVFormat.DEFAULT.builder()
@@ -361,46 +499,82 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-    private static void processMainFile(String mainFilePath, Map<String, CSVRecord> ref1Map, Map<String, CSVRecord> ref2Map, String outputFilePath) throws IOException {
+    private static String processMainFile(
+            String mainFilePath,
+            Map<String, CSVRecord> ref1Map,
+            Map<String, CSVRecord> ref2Map,
+            String outputDirectory
+    ) throws IOException {
+
+        // Ensure the output directory exists
+        Files.createDirectories(Paths.get(outputDirectory));
+        String outputFileName = generateRandomFileName();
+        String outputFilePath = String.format("%s\\%s.csv", outputDirectory, outputFileName);
+
         try (BufferedReader mainReader = new BufferedReader(new FileReader(mainFilePath))) {
+
             CSVFormat format = CSVFormat.DEFAULT.builder()
-                    .setHeader() // Indicates the first record should be used as headers
-                    .setSkipHeaderRecord(true) // Skip the header record while reading data
+                    .setHeader()                                // Indicates the first record should be used as headers
+                    .setSkipHeaderRecord(true)                  // Skip the header record while reading data
                     .build();
-            try (CSVParser mainParser = new CSVParser(mainReader, format);
-                 CSVPrinter outputPrinter = new CSVPrinter(new FileWriter(outputFilePath),
-                         CSVFormat.DEFAULT.builder()
-                                 .setHeader("FullName", "Percentage") // Set headers for the output file
-                                 .build())) {
+
+            try (
+                    CSVParser mainParser = new CSVParser(mainReader, format);
+                    CSVPrinter outputPrinter = new CSVPrinter(new FileWriter(outputFilePath),
+                            // Set headers for the output file
+                            CSVFormat.DEFAULT.builder()
+                                 .setHeader(
+                                         "FullName",
+                                         "Address",
+                                         "MaritalStatus",
+                                         "BMI",
+                                         "AnnualIncome",
+                                         "TaxPaid",
+                                         "NationalIdentifier"
+                                 )
+                                 .build()
+                    )
+            ) {
 
                 for (CSVRecord mainRecord : mainParser) {
-                    String id = mainRecord.get("NationalIdentifier");
+                    String id = mainRecord.get(4);
                     CSVRecord ref1Record = ref1Map.get(id);
                     CSVRecord ref2Record = ref2Map.get(id);
 
-                    if (ref1Record != null && ref2Record != null) {
-                        String column1 = mainRecord.get("FirstName");
-                        String column2 = ref1Record.get("Gender");
-//                        String column4 = ref2Record.get("Column4");
 
-                        // Compute OutputField1
-                        String outputField1 = column1 + column2;
 
-                        // Compute OutputField2
-                        double mainColumn3 = Double.parseDouble(mainRecord.get("Age"));
-                        double ref1Column1 = Double.parseDouble(ref1Record.get("Height"));
-                        double ref2Column2 = Double.parseDouble(ref2Record.get("TaxRate"));
-                        double outputField2 = (mainColumn3 * ref1Column1) / ref2Column2;
-
-                        // Write to output file
-                        outputPrinter.printRecord(outputField1, (int) outputField2);
-                    }
+                    // Write to output file
+//                    outputPrinter.printRecord(outputField1, outputField1);
                 }
             }
         }
+        return outputFileName;
     }
 
 
+
+//    public Object[] processColumnData(
+//            FieldName fieldName,
+//            CSVRecord mainRecord,
+//            CSVRecord ref1Record,
+//            CSVRecord ref2Record
+//    ){
+//
+//
+//
+//
+//
+//    }
+
+
+
+
+
+    private static String generateRandomFileName() {
+        String uuid = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 4);
+        String suffix = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMdd"));
+        return uuid + suffix;
+    }
 
 
 
@@ -429,6 +603,51 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .build();
     }
 
+
+
+    @Override
+    public APIResponse<?> test() {
+        List<Object> values = List.of(5, 2, 3); // Example values
+
+        String pattern = "<>>>0<<<> + <>>>1<<<>";
+        try {
+            String replacedExpression = replacePlaceholders(pattern, values);
+            System.out.println("Replaced Expression: " + replacedExpression); // Output: 5 + 2 * 3
+
+            double result = textHelper.evaluateExpression(replacedExpression);
+            System.out.println("Evaluation Result: " + result); // Output: 11.0
+        } catch (Exception e) {
+            throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
+        }
+
+        return null;
+    }
+
+    public static String replacePlaceholders(String expression, List<Object> values) {
+        String patternString = "<>>>\\d+<<<>";
+        Pattern pattern = Pattern.compile(patternString);
+        Matcher matcher = pattern.matcher(expression);
+
+        StringBuilder result = new StringBuilder(expression);
+        int offset = 0; // to account for changes in the length of the string
+
+        while (matcher.find()) {
+            int start = matcher.start();
+            int end = matcher.end();
+
+            // Extract the placeholder index
+            String placeholder = expression.substring(start, end);
+            String indexString = placeholder.replaceAll("[^\\d]", "");
+            int index = Integer.parseInt(indexString);
+
+            // Replace with value from the list
+            String replacement = values.get(index).toString();
+            result.replace(start - offset, end - offset, replacement);
+            offset += (end - start) - replacement.length();
+        }
+
+        return result.toString();
+    }
 
 
 
@@ -689,7 +908,6 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         String fileName = randomId + "-" + formattedNOW() + "." + fileExtension;
 
         // Save the file to the specified directory
-//		try {
         Path filePath = Paths.get(directory, fileName);
         file.transferTo(filePath);
 
@@ -700,11 +918,6 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .fileType(file.getContentType())
                 .filePath(filePath.toString())
                 .build();
-
-//		} catch (Exception exception) {
-//			throw new InvalidDataException(exception.getMessage());
-//		}
-
     }
     
 
