@@ -1,10 +1,10 @@
 package com.service.report.generator.repository;
 
-import com.service.report.generator.entity.RegistryModel;
+import com.service.report.generator.entity.DeviceRegistryModel;
 import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface RegistryRepository extends JpaRepository<RegistryModel, Long> {
+public interface RegistryRepository extends JpaRepository<DeviceRegistryModel, Long> {
 
-    RegistryModel findByMacAddress(String macAddress);
+    DeviceRegistryModel findByMacAddress(String macAddress);
 
 }

@@ -13,7 +13,7 @@ import java.time.Instant;
 @AllArgsConstructor
 @Entity
 @Table(name = "registry")
-public class RegistryModel {
+public class DeviceRegistryModel {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

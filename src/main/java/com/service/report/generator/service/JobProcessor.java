@@ -1,7 +1,7 @@
 package com.service.report.generator.service;
 
 import com.service.report.generator.entity.JobModel;
-import com.service.report.generator.entity.RegistryModel;
+import com.service.report.generator.entity.DeviceRegistryModel;
 import com.service.report.generator.properties.amqp.AMQPConfigProperties;
 import com.service.report.generator.repository.JobRepository;
 import com.service.report.generator.repository.RegistryRepository;
@@ -61,7 +61,7 @@ public class JobProcessor {
 
         model.setStatus(JobStatus.RUNNING);
         model.setLastRanAt(Instant.now());
-        RegistryModel instance = getInstance();
+        DeviceRegistryModel instance = getInstance();
         model.setLastRanBy(instance.getMacAddress());
         JobModel job = jobRepository.saveAndFlush(model);
 
@@ -84,7 +84,7 @@ public class JobProcessor {
      * using the current device's IP and MAC addresses.
      * @return The instance from the registry based on the current device's MAC address.
      */
-    public RegistryModel getInstance() {
+    public DeviceRegistryModel getInstance() {
         // Retrieve the current device's IP and MAC addresses.
         String currentInstanceIpAddress = deviceIdentity.getDeviceAddress(DeviceAddressType.IP);
         String currentInstanceMacAddress = deviceIdentity.getDeviceAddress(DeviceAddressType.MAC);
@@ -93,7 +93,7 @@ public class JobProcessor {
         // Otherwise, create a new instance using the current device's IP and MAC addresses.
         return Optional.of(currentInstanceMacAddress)
                 .map(registryRepository::findByMacAddress)
-                .orElse(RegistryModel.builder()
+                .orElse(DeviceRegistryModel.builder()
                         .ipAddress(currentInstanceIpAddress)
                         .macAddress(currentInstanceMacAddress)
                         .lastUpdateReceived(Instant.now())

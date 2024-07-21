@@ -234,8 +234,8 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         }
 
         if(0 == registryRepository.count()){
-            RegistryModel registryModel = jobProcessor.getInstance();
-            registryRepository.save(registryModel);
+            DeviceRegistryModel deviceRegistryModel = jobProcessor.getInstance();
+            registryRepository.save(deviceRegistryModel);
         }
 
     }
@@ -451,14 +451,14 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 referenceFile2 = fileDataRepository.findById(referenceFileID.get(1));
         }
 
-        String outputFileName;
+        OutputFileDTO outputFileDTO;
         try {
             // Load reference files into maps
             Map<String, CSVRecord> ref1Map = loadReferenceFile(referenceFile1.get().getFilePath(), "NationalIdentifier");
             Map<String, CSVRecord> ref2Map = loadReferenceFile(referenceFile2.get().getFilePath(), "NationalIdentifier");
 
             // Process the main file and write the output
-            outputFileName = processMainFile(
+            outputFileDTO = processMainFile(
                     mainFileDataModel.get().getFilePath(),
                     ref1Map,
                     ref2Map,
@@ -469,13 +469,25 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             throw new InvalidDataException("File processing failed.");
         }
 
-        RegistryModel registryModel = jobProcessor.getInstance();
+        DeviceRegistryModel deviceRegistryModel = jobProcessor.getInstance();
 
         jobModel.setStatus(JobStatus.SUCCESS);
         jobModel.setAttempts(jobModel.getAttempts() + 1);
         jobModel.setLastRanAt(Instant.now());
-        jobModel.setLastRanBy(registryModel.getMacAddress());
+        jobModel.setLastRanBy(deviceRegistryModel.getMacAddress());
         jobRepository.save(jobModel);
+
+        String outputFileName = outputFileDTO.getOutputFileName() + ".csv";
+
+        fileDataRepository.save(
+                FileDataModel.builder()
+                        .fileName(outputFileName)
+                        .fileOriginal(outputFileName)
+                        .filePath(outputFileDTO.getFilePath())
+                        .fileType(outputFileDTO.getFileType())
+                        .fileCategory(FileCategory.OUTPUT)
+                        .build()
+        );
 
         return outputFileName;
     }
@@ -505,7 +517,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-    public String processMainFile(
+    public OutputFileDTO processMainFile(
             String mainFilePath,
             Map<String, CSVRecord> ref1Map,
             Map<String, CSVRecord> ref2Map,
@@ -516,6 +528,9 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         Files.createDirectories(Paths.get(outputDirectory));
         String outputFileName = generateRandomFileName();
         String outputFilePath = String.format("%s%s.csv", outputDirectory, outputFileName);
+
+        // Get file content type
+        String contentType = Files.probeContentType(Paths.get(outputFilePath));
 
         List<FieldName> fieldNameList = List.of(FieldName.OUTFIELD1, FieldName.OUTFIELD2, FieldName.OUTFIELD3, FieldName.OUTFIELD4, FieldName.OUTFIELD5, FieldName.OUTFIELD6, FieldName.OUTFIELD7);
         List<TransformationRuleModel> transformationRules = transformationRuleRepository.findByFieldNameIn(fieldNameList);
@@ -561,7 +576,11 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             }
 
         }
-        return outputFileName;
+        return OutputFileDTO.builder()
+                .outputFileName(outputFileName)
+                .filePath(outputFilePath)
+                .fileType(contentType)
+                .build();
     }
 
 
@@ -1087,7 +1106,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         String randomId = UUID.randomUUID().toString().replace("-", "");
 
         // Generate a unique filename using UUID
-        String fileName = randomId + "-" + formattedNOW() + "." + fileExtension;
+        String fileName = generateRandomFileName() + "." + fileExtension;
 
         // Save the file to the specified directory
         Path filePath = Paths.get(directory, fileName);
@@ -1099,6 +1118,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .fileOriginal(textHelper.sanitize(file.getOriginalFilename()))
                 .fileType(file.getContentType())
                 .filePath(filePath.toString())
+                .fileCategory(FileCategory.INPUT)
                 .build();
     }
     

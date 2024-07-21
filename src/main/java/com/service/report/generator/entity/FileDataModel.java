@@ -1,5 +1,6 @@
 package com.service.report.generator.entity;
 
+import com.service.report.generator.tag.FileCategory;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -36,5 +37,9 @@ public class FileDataModel extends Auditable{
     @Comment("This column stores the path of file.")
     @Column(name = "fil_path", nullable = false)
     private String filePath;
+
+    @Comment("This column stores the category of file : INPUT(0), OUTPUT(1)")
+    @Column(name = "fil_ctg", nullable = false)
+    private FileCategory fileCategory;
 
 }
