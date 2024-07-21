@@ -3,8 +3,8 @@ package com.service.report.generator.consumer;
 import com.service.report.generator.entity.JobModel;
 import com.service.report.generator.experimental.ImplProvider;
 import com.service.report.generator.repository.JobRepository;
+import com.service.report.generator.service.ReportGeneratorServiceImpl;
 import com.service.report.generator.tag.JobStatus;
-import com.service.report.generator.tag.JobType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
@@ -14,13 +14,13 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Objects;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class JobExecuter {
 
+    private final ReportGeneratorServiceImpl reportGeneratorService;
     private final JobRepository jobRepository;
 
     private static final String DEFAULT_JOB_LOGGER_MESSAGE = "Executing job ({}) --- {}";
@@ -41,6 +41,13 @@ public class JobExecuter {
     @RabbitListener(queues = "#{standardQueue.getName()}")
     @Transactional(isolation = Isolation.SERIALIZABLE, propagation = Propagation.REQUIRED)
     public void executeStandardJobs(Long jobId) {
+
+        executor(jobId, (job) ->{
+            log.info("Started job("+job.getJobUid()+") execution");
+            String outputFileName = reportGeneratorService.executeReportGeneration(job);
+            log.info("Job("+job.getJobUid()+") executed successfully.");
+        });
+
         // TODO
     }
 

@@ -29,7 +29,4 @@ public class RegistryModel {
     @Column(name = "reg_ip_address", nullable = false, length = 40)
     private String ipAddress;
 
-//    @Column(name = "reg_instance_id", nullable = false)
-//    private int instance;
-
 }

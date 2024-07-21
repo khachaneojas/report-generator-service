@@ -34,12 +34,12 @@ public class TextWizard implements TextHelper{
     }
 
 
-    public float evaluateExpression(String expression) {
+    public double evaluateExpression(String expression) {
         try (Context context = Context.newBuilder()
-                .option("engine.WarnInterpreterOnly", "false") // Disable warning
+                .option("engine.WarnInterpreterOnly", "false")                  // Disable warning
                 .build()) {
             Value result = context.eval("js", expression);
-            return result.asFloat();
+            return result.asDouble();
         }
     }
 

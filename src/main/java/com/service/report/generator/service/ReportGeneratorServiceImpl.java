@@ -62,6 +62,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     private final JwtWizard jwtUtils;
     private final UserRoleRepository userRoleRepository;
     private final TransformationRuleRepository transformationRuleRepository;
+    private final RegistryRepository registryRepository;
 
     private static final String ERROR_GENERIC_MESSAGE = "Oops! Something went wrong.";
     private static final String JOB_NAME = "Report Generation";
@@ -98,7 +99,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             jobScheduleTimingRepository.save(
                     JobScheduleTimingModel.builder()
                             .jobType(JobType.REPORT_GENERATOR)
-                            .scheduleTime(LocalTime.of(18, 0)) //12:30 as per UTC
+                            .scheduleTime(LocalTime.of(16, 15)) // 18:00 IST / 12:30 as per UTC in db
                             .build()
             );
         }
@@ -224,32 +225,21 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                             .fieldName(FieldName.OUTFIELD7)
                             .columnName("NationalIdentifier")
                             .operationType(OperationType.DEFAULT)
-                            .transformationExpression("<>>>0<<<>")
+                            .transformationExpression("0")
                             .transformationData(field7Data)
                             .build()
             );
 
             transformationRuleRepository.saveAll(transformationRules);
-
         }
 
+        if(0 == registryRepository.count()){
+            RegistryModel registryModel = jobProcessor.getInstance();
+            registryRepository.save(registryModel);
+        }
 
     }
 
-
-    public static List<Long> extractNumbersAsLong(String expression) {
-        List<Long> numbers = new ArrayList<>();
-        // Regular expression to find numbers enclosed in <>>> and <>>>
-        Pattern pattern = Pattern.compile("<>>>(\\d+)<<<>");
-        Matcher matcher = pattern.matcher(expression);
-
-        while (matcher.find()) {
-            // Convert the extracted string to Long and add to the list
-            numbers.add(Long.parseLong(matcher.group(1)));
-        }
-
-        return numbers;
-    }
 
 
 
@@ -320,6 +310,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
     @Override
+    @Transactional(
+            isolation = Isolation.SERIALIZABLE,
+            propagation = Propagation.REQUIRED
+    )
     public APIResponse<?> uploadFile(
             MultipartFile mainfile,
             MultipartFile reference1,
@@ -413,6 +407,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
     @Override
+    @Transactional(
+            isolation = Isolation.SERIALIZABLE,
+            propagation = Propagation.REQUIRED
+    )
     public APIResponse<?> triggerReportGeneration(
             String jobId
     ) {
@@ -431,7 +429,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-    private String executeReportGeneration(
+    public String executeReportGeneration(
             JobModel jobModel
     ){
         String jobData = jobModel.getJsonData();
@@ -471,12 +469,20 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             throw new InvalidDataException("File processing failed.");
         }
 
+        RegistryModel registryModel = jobProcessor.getInstance();
+
+        jobModel.setStatus(JobStatus.SUCCESS);
+        jobModel.setAttempts(jobModel.getAttempts() + 1);
+        jobModel.setLastRanAt(Instant.now());
+        jobModel.setLastRanBy(registryModel.getMacAddress());
+        jobRepository.save(jobModel);
+
         return outputFileName;
     }
 
 
 
-    private static Map<String, CSVRecord> loadReferenceFile(
+    public static Map<String, CSVRecord> loadReferenceFile(
             String filePath,
             String idColumnName
     ) throws IOException {
@@ -499,7 +505,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-    private static String processMainFile(
+    public String processMainFile(
             String mainFilePath,
             Map<String, CSVRecord> ref1Map,
             Map<String, CSVRecord> ref2Map,
@@ -509,7 +515,13 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         // Ensure the output directory exists
         Files.createDirectories(Paths.get(outputDirectory));
         String outputFileName = generateRandomFileName();
-        String outputFilePath = String.format("%s\\%s.csv", outputDirectory, outputFileName);
+        String outputFilePath = String.format("%s%s.csv", outputDirectory, outputFileName);
+
+        List<FieldName> fieldNameList = List.of(FieldName.OUTFIELD1, FieldName.OUTFIELD2, FieldName.OUTFIELD3, FieldName.OUTFIELD4, FieldName.OUTFIELD5, FieldName.OUTFIELD6, FieldName.OUTFIELD7);
+        List<TransformationRuleModel> transformationRules = transformationRuleRepository.findByFieldNameIn(fieldNameList);
+
+        Map<FieldName, TransformationRuleModel> transformationRuleMap = transformationRules.stream()
+                .collect(Collectors.toMap(TransformationRuleModel::getFieldName, rule -> rule));
 
         try (BufferedReader mainReader = new BufferedReader(new FileReader(mainFilePath))) {
 
@@ -523,15 +535,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                     CSVPrinter outputPrinter = new CSVPrinter(new FileWriter(outputFilePath),
                             // Set headers for the output file
                             CSVFormat.DEFAULT.builder()
-                                 .setHeader(
-                                         "FullName",
-                                         "Address",
-                                         "MaritalStatus",
-                                         "BMI",
-                                         "AnnualIncome",
-                                         "TaxPaid",
-                                         "NationalIdentifier"
-                                 )
+                                 .setHeader(transformationRules.stream().map(TransformationRuleModel::getColumnName).toArray(String[]::new))     // Convert List to array
                                  .build()
                     )
             ) {
@@ -541,36 +545,235 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                     CSVRecord ref1Record = ref1Map.get(id);
                     CSVRecord ref2Record = ref2Map.get(id);
 
-
+                    Object[] columnData;
+                    try {
+                        columnData = processColumnData(transformationRuleMap, mainRecord, ref1Record, ref2Record);
+                    }
+                    catch (Exception e){
+                        outputPrinter.close();
+                        deleteLocallySavedFiles(List.of(outputFilePath));
+                        throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
+                    }
 
                     // Write to output file
-//                    outputPrinter.printRecord(outputField1, outputField1);
+                    outputPrinter.printRecord(columnData);
                 }
             }
+
         }
         return outputFileName;
     }
 
 
 
-//    public Object[] processColumnData(
-//            FieldName fieldName,
-//            CSVRecord mainRecord,
-//            CSVRecord ref1Record,
-//            CSVRecord ref2Record
-//    ){
-//
-//
-//
-//
-//
-//    }
+    public Object[] processColumnData(
+            Map<FieldName, TransformationRuleModel> transformationRuleMap,
+            CSVRecord mainRecord,
+            CSVRecord ref1Record,
+            CSVRecord ref2Record
+    ){
+        List<FieldName> fieldNameList = List.of(FieldName.OUTFIELD1, FieldName.OUTFIELD2, FieldName.OUTFIELD3, FieldName.OUTFIELD4, FieldName.OUTFIELD5, FieldName.OUTFIELD6, FieldName.OUTFIELD7);
+
+        Object[] ouputData = new Object[7];
+        for(int i = 0; i < ouputData.length; i++){
+            FieldName fieldName = fieldNameList.get(i);
+            TransformationRuleModel transformationRule = transformationRuleMap.get(fieldName);
+            ouputData[i] = transformColumnData(transformationRule, mainRecord, ref1Record, ref2Record);
+        }
+
+        return ouputData;
+    }
+
+
+
+    public Object transformColumnData(
+            TransformationRuleModel transformationRule,
+            CSVRecord mainRecord,
+            CSVRecord ref1Record,
+            CSVRecord ref2Record
+    ){
+
+        OperationType operationType = transformationRule.getOperationType();
+        String transformationExpression = transformationRule.getTransformationExpression();
+        String transformationData = transformationRule.getTransformationData();
+
+        Map<Integer, RuleDTO> ruleDTOMap = jsonConverter.getMapFromJsonString(transformationData, Integer.class, RuleDTO.class);
+
+        Object outputData = null;
+
+        switch (operationType){
+
+            case DEFAULT -> {
+
+                List<Integer> mapIndex = extractNumbers(transformationExpression);
+
+                RuleDTO ruleDTO = ruleDTOMap.get(mapIndex.get(0));
+                Integer id = ruleDTO.getId();
+                Integer columnIndex = ruleDTO.getCol();
+
+                outputData = switch (id) {
+                    case 1 -> mainRecord.get(columnIndex);
+                    case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
+                    case 3 -> null != ref2Record ? ref2Record.get(columnIndex) : null;
+                    default -> null;
+                };
+            }
+
+            case SPACE_BETWEEN -> {
+
+                List<Integer> mapIndex = extractNumbers(transformationExpression);
+
+                List<String> columnValues = mapIndex.stream()
+                        .map(index -> {
+
+                            RuleDTO ruleDTO = ruleDTOMap.get(index);
+                            Integer id = ruleDTO.getId();
+                            Integer columnIndex = ruleDTO.getCol();
+
+                            return switch (id) {
+                                case 1 -> mainRecord.get(columnIndex);
+                                case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
+                                case 3 -> null != ref2Record ? ref2Record.get(columnIndex) : null;
+                                default -> null;
+                            };
+
+                        })
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(ArrayList::new));
+
+                outputData = String.join(" ", columnValues);
+            }
+
+            case COMMA_SEPARATED -> {
+
+                List<Integer> mapIndex = extractNumbers(transformationExpression);
+
+                List<String> columnValues = mapIndex.stream()
+                        .map(index -> {
+
+                            RuleDTO ruleDTO = ruleDTOMap.get(index);
+                            Integer id = ruleDTO.getId();
+                            Integer columnIndex = ruleDTO.getCol();
+
+                            return switch (id) {
+                                case 1 -> mainRecord.get(columnIndex);
+                                case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
+                                case 3 -> null != ref2Record ? ref2Record.get(columnIndex) : null;
+                                default -> null;
+                            };
+
+                        })
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(ArrayList::new));
+
+                outputData = String.join(", ", columnValues);
+            }
+
+            case MATHEMATICAL -> {
+
+                List<Integer> mapIndex = extractNumbersByPattern(transformationExpression);
+
+                List<Object> columnValues = new ArrayList<>();
+
+                for(Integer index : mapIndex) {
+
+                    RuleDTO ruleDTO = ruleDTOMap.get(index);
+                    Integer id = ruleDTO.getId();
+                    Integer columnIndex = ruleDTO.getCol();
+
+                    Object columnValue = switch (id) {
+                                case 1 -> mainRecord.get(columnIndex);
+                                case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
+                                case 3 -> null != ref2Record ? ref2Record.get(columnIndex) : null;
+                                default -> null;
+                            };
+
+                    if(null == columnValue)
+                        break;
+
+                    columnValues.add(columnValue);
+                }
+
+                if(!columnValues.isEmpty()){
+                    String replacedExpression = replacePlaceholders(transformationExpression, columnValues);
+                    outputData = textHelper.evaluateExpression(replacedExpression);
+                }
+
+            }
+
+        }
+
+        return outputData;
+    }
+
+
+
+    public static String replacePlaceholders(String expression, List<Object> values) {
+        String patternString = "<>>>\\d+<<<>";
+        Pattern pattern = Pattern.compile(patternString);
+        Matcher matcher = pattern.matcher(expression);
+
+        StringBuilder result = new StringBuilder(expression);
+        int offset = 0; // to account for changes in the length of the string
+
+        while (matcher.find()) {
+            int start = matcher.start();
+            int end = matcher.end();
+
+            // Extract the placeholder index
+            String placeholder = expression.substring(start, end);
+            String indexString = placeholder.replaceAll("[^\\d]", "");
+            int index = Integer.parseInt(indexString);
+
+            // Replace with value from the list
+            String replacement = values.get(index).toString();
+            result.replace(start - offset, end - offset, replacement);
+            offset += (end - start) - replacement.length();
+        }
+
+        return result.toString();
+    }
 
 
 
 
+    public static List<Integer> extractNumbersByPattern(
+            String expression
+    ) {
 
-    private static String generateRandomFileName() {
+        List<Integer> numbers = new ArrayList<>();
+
+        // Regular expression to find numbers enclosed in <>>> and <>>>
+        Pattern pattern = Pattern.compile("<>>>(\\d+)<<<>");
+        Matcher matcher = pattern.matcher(expression);
+
+        while (matcher.find()) {
+            // Convert the extracted string to Long and add to the list
+            numbers.add(Integer.parseInt(matcher.group(1)));
+        }
+
+        return numbers;
+    }
+
+
+
+    public static List<Integer> extractNumbers(
+            String expression
+    ) {
+
+        List<Integer> numbers = new ArrayList<>();
+        String[] parts = expression.split(",");
+
+        for (String part : parts) {
+            numbers.add(Integer.parseInt(part.trim()));
+        }
+
+        return numbers;
+    }
+
+
+
+    public static String generateRandomFileName() {
         String uuid = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 4);
         String suffix = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMdd"));
         return uuid + suffix;
@@ -579,6 +782,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
     @Override
+    @Transactional(
+            isolation = Isolation.READ_COMMITTED,
+            propagation = Propagation.REQUIRED
+    )
     public JwtTokenResponse signInUser(
             LoginRequest loginRequest
     ) {
@@ -623,31 +830,6 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         return null;
     }
 
-    public static String replacePlaceholders(String expression, List<Object> values) {
-        String patternString = "<>>>\\d+<<<>";
-        Pattern pattern = Pattern.compile(patternString);
-        Matcher matcher = pattern.matcher(expression);
-
-        StringBuilder result = new StringBuilder(expression);
-        int offset = 0; // to account for changes in the length of the string
-
-        while (matcher.find()) {
-            int start = matcher.start();
-            int end = matcher.end();
-
-            // Extract the placeholder index
-            String placeholder = expression.substring(start, end);
-            String indexString = placeholder.replaceAll("[^\\d]", "");
-            int index = Integer.parseInt(indexString);
-
-            // Replace with value from the list
-            String replacement = values.get(index).toString();
-            result.replace(start - offset, end - offset, replacement);
-            offset += (end - start) - replacement.length();
-        }
-
-        return result.toString();
-    }
 
 
 
@@ -657,7 +839,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
      * @param fileMap the map containing the FileType and their id respectively
      * @throws NullPointerException if the fileMap is null
      */
-    private void scheduleJobForReportGeneration(
+    public void scheduleJobForReportGeneration(
             Map<FileType, ListDTO> fileMap,
             UserModel userModel
     ){
@@ -800,8 +982,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             for (MultipartFile file : multipartFiles) {
                 String fileExtension = fileUtils.hasValidFileExtension(file.getOriginalFilename());
 
-                if (null == fileExtension || file.getSize() > MAX_TOTAL_FILES_SIZE)
+                if (null == fileExtension || file.getSize() > MAX_TOTAL_FILES_SIZE) {
                     deleteLocallySavedFiles(locallySavedFiles);
+                    throw new InvalidDataException("Invalid file found.");
+                }
 
                 FileDataModel fileDataModel = saveFileLocally(directory, file);
                 FileDataModel savedFileDataModel = fileDataRepository.save(fileDataModel);
@@ -826,13 +1010,11 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     public void deleteLocallySavedFiles(
             List<String> locallySavedFiles
     ){
-        if (!locallySavedFiles.isEmpty()) {
-            for (String filePath : locallySavedFiles) {
-                fileUtils.deleteFileLocally(filePath);
+            if (!locallySavedFiles.isEmpty()) {
+                for (String filePath : locallySavedFiles) {
+                    fileUtils.deleteFileLocally(filePath);
+                }
             }
-        }
-
-        throw new InvalidDataException("Invalid file found.");
     }
 
 
@@ -861,7 +1043,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
      * Adds jobs to RabbitMQ for processing.
      * This method retrieves jobs from the database and adds them to the RabbitMQ queue based on their status and schedule.
      */
-    private void publishJobsInQueue() {
+    public void publishJobsInQueue() {
 
         jobRepository.findAll()
                 .stream()

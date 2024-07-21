@@ -49,7 +49,6 @@ public class JobProcessor {
             retryDelayExceeded = (model.getLastRanAt().toEpochMilli() + amqpConfigProperties.getRetryDelay()) < now.toEpochMilli();
         }
 
-
         return retryDelayExceeded && isExecuteAtBeforeOrEqualToNow(model::getExecuteAt);
     }
 
@@ -97,6 +96,7 @@ public class JobProcessor {
                 .orElse(RegistryModel.builder()
                         .ipAddress(currentInstanceIpAddress)
                         .macAddress(currentInstanceMacAddress)
+                        .lastUpdateReceived(Instant.now())
                         .build()
                 );
     }

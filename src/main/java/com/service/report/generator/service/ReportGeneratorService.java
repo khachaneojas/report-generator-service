@@ -4,6 +4,7 @@ import com.service.report.generator.dto.APIResponse;
 import com.service.report.generator.dto.JwtTokenResponse;
 import com.service.report.generator.dto.TokenValidationResponse;
 import com.service.report.generator.dto.payload.LoginRequest;
+import com.service.report.generator.entity.JobModel;
 import org.springframework.web.multipart.MultipartFile;
 
 public interface ReportGeneratorService {
