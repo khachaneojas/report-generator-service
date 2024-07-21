@@ -275,7 +275,13 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     }
 
 
-
+    /**
+     * Generates a unique job UID based on the current date and a random UUID suffix.
+     * The method ensures that the generated UID does not already exist in the database.
+     *
+     * @return A unique job UID.
+     * @throws InvalidDataException If the method fails to generate a unique UID after 100 attempts.
+     */
     public String generateJobUid() {
         // Generate the prefix using the current date-time in a specific format
         String prefix = "J" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMdd"));
@@ -308,7 +314,15 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     }
 
 
-
+    /**
+     * Handles the upload of main and reference files, and processes them based on their types.
+     * @param mainfile The main file to be uploaded, which is mandatory.
+     * @param reference1 An optional reference file to be uploaded.
+     * @param reference2 An optional second reference file to be uploaded.
+     * @param validationResponse The validation response containing user information.
+     * @return APIResponse indicating the success or failure of the file upload operation.
+     * @throws InvalidDataException if the main file is null or empty, or if there is an application-level error during processing.
+     */
     @Override
     @Transactional(
             isolation = Isolation.SERIALIZABLE,
@@ -321,20 +335,26 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             TokenValidationResponse validationResponse
     ) {
 
+        // Check if the main file is provided and not empty
         if(null == mainfile || mainfile.isEmpty())
             throw new InvalidDataException("To proceed, provide with a input file");
 
+        // Retrieve the logged-in user information using the validation response
         Optional<UserModel> loggedInUser = userRepository.findById(validationResponse.getPid());
 
+        // Determine if reference files are provided
         boolean isReference1Present = null != reference1 && !reference1.isEmpty();
         boolean isReference2Present = null != reference2 && !reference2.isEmpty();
 
+        // Prepare a map to hold file type and corresponding MultipartFile list
         Map<FileType, List<MultipartFile>> multipartFileMap = new LinkedHashMap<>();
 
+        // Add main file to the map
         List<MultipartFile> mainMultipartFile = new ArrayList<>();
         mainMultipartFile.add(mainfile);
         multipartFileMap.put(FileType.MAIN,mainMultipartFile);
 
+        // Add reference files to the map if present
         List<MultipartFile> referenceMultipartFile = new ArrayList<>();
         if(isReference1Present)
             referenceMultipartFile.add(reference1);
@@ -345,11 +365,13 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         if(!referenceMultipartFile.isEmpty())
             multipartFileMap.put(FileType.REFERENCE, referenceMultipartFile);
 
+        // Update document data models from the provided files
         Map<FileType, List<FileDataDTO>> fileDataDTOMap= updateDocumentByFileDataModel(
                 multipartFileMap,
                 documentDirectory
         );
 
+        // Retrieve FileDataDTO objects for the uploaded files
         FileDataDTO mainFileDTO = fileDataDTOMap.get(FileType.MAIN).get(0);
 
         FileDataDTO reference1DTO = null;
@@ -363,6 +385,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 reference2DTO = referenceDTOList.get(1);
         }
 
+        // Determine the file extension type based on the uploaded files
         FileExtensionType fileExtensionType = getFileType(mainFileDTO.getFileExtension(),
                 null != reference1DTO ? reference1DTO.getFileExtension() : null,
                 null != reference2DTO ? reference2DTO.getFileExtension() : null);
@@ -370,7 +393,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         switch (fileExtensionType){
 
             case CSV -> {
-
+                // Prepare file ID lists for scheduling report generation
                 Map<FileType, ListDTO> fileMap = new LinkedHashMap<>();
 
                 // Adding main file ID to the map
@@ -389,8 +412,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 if(!referenceFileIdList.isEmpty())
                     fileMap.put(FileType.REFERENCE,  ListDTO.builder().id(referenceFileIdList).build());
 
+                // Schedule a job for report generation based on the uploaded files
                 scheduleJobForReportGeneration(fileMap, loggedInUser.get());
 
+                // Return success message in APIResponse
                 return APIResponse.builder()
                         .message("Files successfully uploaded.")
                         .build();
@@ -398,6 +423,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         }
 
+        // Return message indicating that only CSV files are supported
         return APIResponse.builder()
                 .message("Currently we only serve csv files")
                 .build();
@@ -406,6 +432,12 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
+    /**
+     * Triggers the report generation process for the specified job ID and returns the result.
+     * @param jobId The unique identifier for the job to be processed.
+     * @return APIResponse indicating the success of the report generation and the name of the created output file.
+     * @throws InvalidDataException if the job ID is not found in the repository or if there is an application-level error during processing.
+     */
     @Override
     @Transactional(
             isolation = Isolation.SERIALIZABLE,
@@ -414,13 +446,17 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     public APIResponse<?> triggerReportGeneration(
             String jobId
     ) {
-
+        // Retrieve the job model from the repository based on the provided job ID
         Optional<JobModel> jobModel = jobRepository.findByJobUid(jobId);
+
+        // If the job model is not found, throw an exception
         if(jobModel.isEmpty())
             throw new InvalidDataException("Job not found for given ID, double-check and try again");
 
+        // Execute the report generation process for the found job model
         String outputFileName = executeReportGeneration(jobModel.get());
 
+        // Return success message with the name of the created output file
         return APIResponse.builder()
                 .message("Transformation completed successfully. The output file ("+outputFileName+") has been created.")
                 .build();
@@ -428,14 +464,22 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-
+    /**
+     * Executes the report generation process based on the provided job model and returns the name of the created output file.
+     * @param jobModel The job model containing configuration and file references for the report generation.
+     * @return The name of the created output file.
+     * @throws InvalidDataException if there is an issue with file processing or if job data is invalid.
+     * @throws IOException if there is an error during file I/O operations.
+     */
     public String executeReportGeneration(
             JobModel jobModel
     ){
+        // Retrieve the JSON data from the job model and convert it to a map of file types to list DTOs
         String jobData = jobModel.getJsonData();
 
         Map<FileType, ListDTO> jobDataMap = jsonConverter.getMapFromJsonString(jobData, FileType.class, ListDTO.class);
 
+        // Get the main file data model and reference file data models from the repository
         ListDTO mainListDTO = jobDataMap.get(FileType.MAIN);
         Optional<FileDataModel> mainFileDataModel = fileDataRepository.findById(mainListDTO.getId().get(0));
 
@@ -453,11 +497,11 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         OutputFileDTO outputFileDTO;
         try {
-            // Load reference files into maps
+            // Load reference files into maps for processing
             Map<String, CSVRecord> ref1Map = loadReferenceFile(referenceFile1.get().getFilePath(), "NationalIdentifier");
             Map<String, CSVRecord> ref2Map = loadReferenceFile(referenceFile2.get().getFilePath(), "NationalIdentifier");
 
-            // Process the main file and write the output
+            // Process the main file and generate the output
             outputFileDTO = processMainFile(
                     mainFileDataModel.get().getFilePath(),
                     ref1Map,
@@ -471,12 +515,14 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         DeviceRegistryModel deviceRegistryModel = jobProcessor.getInstance();
 
+        // Update the job model status and save it in the repository
         jobModel.setStatus(JobStatus.SUCCESS);
         jobModel.setAttempts(jobModel.getAttempts() + 1);
         jobModel.setLastRanAt(Instant.now());
         jobModel.setLastRanBy(deviceRegistryModel.getMacAddress());
         jobRepository.save(jobModel);
 
+        // Save the output file information in the repository
         String outputFileName = outputFileDTO.getOutputFileName() + ".csv";
 
         fileDataRepository.save(
@@ -489,34 +535,57 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                         .build()
         );
 
+        // Return the name of the created output file
         return outputFileName;
     }
 
 
 
+    /**
+     * Loads a CSV file and returns a map of CSV records indexed by a specified column value.
+     * @param filePath The path to the CSV file to be loaded.
+     * @param idColumnName The name of the column to be used as the key in the resulting map.
+     * @return A map where the keys are values from the specified column and the values are the corresponding CSV records.
+     * @throws IOException if an error occurs while reading the file.
+     */
     public static Map<String, CSVRecord> loadReferenceFile(
             String filePath,
             String idColumnName
     ) throws IOException {
 
         Map<String, CSVRecord> map = new HashMap<>();
+        // Open the file and read it using BufferedReader
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            // Set up the CSVFormat with header and skip header record
             CSVFormat format = CSVFormat.DEFAULT.builder()
                     .setHeader() // Indicates the first record should be used as headers
                     .setSkipHeaderRecord(true) // Skip the header record while reading data
                     .build();
+            // Parse the CSV file
             try (CSVParser parser = new CSVParser(reader, format)) {
+                // Iterate over each record in the CSV file
                 for (CSVRecord record : parser) {
+                    // Get the value from the specified column and use it as the key
                     String id = record.get(idColumnName);
+                    // Add the record to the map
                     map.put(id, record);
                 }
             }
         }
+        // Return the populated map
         return map;
     }
 
 
-
+    /**
+     * Processes the main CSV file by applying transformation rules and generates an output CSV file.
+     * @param mainFilePath The path to the main CSV file to be processed.
+     * @param ref1Map A map of reference records from the first reference file, indexed by a key column value.
+     * @param ref2Map A map of reference records from the second reference file, indexed by a key column value.
+     * @param outputDirectory The directory where the output CSV file will be saved.
+     * @return An OutputFileDTO containing the name, path, and type of the generated output file.
+     * @throws InvalidDataException if there is an error during data processing.
+     */
     public OutputFileDTO processMainFile(
             String mainFilePath,
             Map<String, CSVRecord> ref1Map,
@@ -526,13 +595,16 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         // Ensure the output directory exists
         Files.createDirectories(Paths.get(outputDirectory));
+        // Generate a random file name for the output file
         String outputFileName = generateRandomFileName();
         String outputFilePath = String.format("%s%s.csv", outputDirectory, outputFileName);
 
-        // Get file content type
+        // Get the content type of the output file
         String contentType = Files.probeContentType(Paths.get(outputFilePath));
 
+        // Define the list of field names for which transformation rules are applied
         List<FieldName> fieldNameList = List.of(FieldName.OUTFIELD1, FieldName.OUTFIELD2, FieldName.OUTFIELD3, FieldName.OUTFIELD4, FieldName.OUTFIELD5, FieldName.OUTFIELD6, FieldName.OUTFIELD7);
+        // Retrieve transformation rules for the specified field names
         List<TransformationRuleModel> transformationRules = transformationRuleRepository.findByFieldNameIn(fieldNameList);
 
         Map<FieldName, TransformationRuleModel> transformationRuleMap = transformationRules.stream()
@@ -540,6 +612,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
         try (BufferedReader mainReader = new BufferedReader(new FileReader(mainFilePath))) {
 
+            // Set up CSV format for reading the main file
             CSVFormat format = CSVFormat.DEFAULT.builder()
                     .setHeader()                                // Indicates the first record should be used as headers
                     .setSkipHeaderRecord(true)                  // Skip the header record while reading data
@@ -548,34 +621,39 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             try (
                     CSVParser mainParser = new CSVParser(mainReader, format);
                     CSVPrinter outputPrinter = new CSVPrinter(new FileWriter(outputFilePath),
-                            // Set headers for the output file
+                            // Set headers for the output file based on transformation rules
                             CSVFormat.DEFAULT.builder()
                                  .setHeader(transformationRules.stream().map(TransformationRuleModel::getColumnName).toArray(String[]::new))     // Convert List to array
                                  .build()
                     )
             ) {
 
+                // Process each record in the main file
                 for (CSVRecord mainRecord : mainParser) {
+                    // Retrieve corresponding reference records
                     String id = mainRecord.get(4);
                     CSVRecord ref1Record = ref1Map.get(id);
                     CSVRecord ref2Record = ref2Map.get(id);
 
                     Object[] columnData;
                     try {
+                        // Process column data based on transformation rules
                         columnData = processColumnData(transformationRuleMap, mainRecord, ref1Record, ref2Record);
                     }
                     catch (Exception e){
+                        // Handle errors by closing the printer and deleting the output file
                         outputPrinter.close();
                         deleteLocallySavedFiles(List.of(outputFilePath));
                         throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
                     }
 
-                    // Write to output file
+                    // Write processed data to the output file
                     outputPrinter.printRecord(columnData);
                 }
             }
 
         }
+        // Return details of the generated output file
         return OutputFileDTO.builder()
                 .outputFileName(outputFileName)
                 .filePath(outputFilePath)
@@ -585,18 +663,31 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
+
+    /**
+     * Processes and transforms column data for a given record based on transformation rules.
+     * @param transformationRuleMap A map of transformation rules keyed by field names.
+     * @param mainRecord The main CSV record from which data is to be transformed.
+     * @param ref1Record The first reference CSV record used for transformation.
+     * @param ref2Record The second reference CSV record used for transformation.
+     * @return An array of transformed data for each field specified in the transformation rules.
+     */
     public Object[] processColumnData(
             Map<FieldName, TransformationRuleModel> transformationRuleMap,
             CSVRecord mainRecord,
             CSVRecord ref1Record,
             CSVRecord ref2Record
     ){
+        // Define the list of field names for which data needs to be transformed
         List<FieldName> fieldNameList = List.of(FieldName.OUTFIELD1, FieldName.OUTFIELD2, FieldName.OUTFIELD3, FieldName.OUTFIELD4, FieldName.OUTFIELD5, FieldName.OUTFIELD6, FieldName.OUTFIELD7);
 
+        // Initialize an array to hold the transformed data
         Object[] ouputData = new Object[7];
+        // Process each field name and apply the corresponding transformation rule
         for(int i = 0; i < ouputData.length; i++){
             FieldName fieldName = fieldNameList.get(i);
             TransformationRuleModel transformationRule = transformationRuleMap.get(fieldName);
+            // Transform the data for the current field and store it in the output array
             ouputData[i] = transformColumnData(transformationRule, mainRecord, ref1Record, ref2Record);
         }
 
@@ -604,32 +695,42 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     }
 
 
-
+    /**
+     * Transforms column data based on the specified transformation rule.
+     * @param transformationRule The rule that defines how to transform the data.
+     * @param mainRecord The main CSV record used for data extraction.
+     * @param ref1Record The first reference CSV record used for data extraction.
+     * @param ref2Record The second reference CSV record used for data extraction.
+     * @return The transformed data based on the operation type defined in the transformation rule.
+     */
     public Object transformColumnData(
             TransformationRuleModel transformationRule,
             CSVRecord mainRecord,
             CSVRecord ref1Record,
             CSVRecord ref2Record
     ){
-
+        // Retrieve operation type and transformation details from the rule
         OperationType operationType = transformationRule.getOperationType();
         String transformationExpression = transformationRule.getTransformationExpression();
         String transformationData = transformationRule.getTransformationData();
 
+        // Convert the transformation data from JSON string to a map of RuleDTO objects
         Map<Integer, RuleDTO> ruleDTOMap = jsonConverter.getMapFromJsonString(transformationData, Integer.class, RuleDTO.class);
 
         Object outputData = null;
 
+        // Perform transformation based on the operation type
         switch (operationType){
 
             case DEFAULT -> {
-
+                // Extract column indices from the transformation expression
                 List<Integer> mapIndex = extractNumbers(transformationExpression);
 
                 RuleDTO ruleDTO = ruleDTOMap.get(mapIndex.get(0));
                 Integer id = ruleDTO.getId();
                 Integer columnIndex = ruleDTO.getCol();
 
+                // Retrieve and set the data from the appropriate record based on ID
                 outputData = switch (id) {
                     case 1 -> mainRecord.get(columnIndex);
                     case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
@@ -639,9 +740,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             }
 
             case SPACE_BETWEEN -> {
-
+                // Extract column indices from the transformation expression
                 List<Integer> mapIndex = extractNumbers(transformationExpression);
 
+                // Collect column values and join them with a space
                 List<String> columnValues = mapIndex.stream()
                         .map(index -> {
 
@@ -664,9 +766,10 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             }
 
             case COMMA_SEPARATED -> {
-
+                // Extract column indices from the transformation expression
                 List<Integer> mapIndex = extractNumbers(transformationExpression);
 
+                // Collect column values and join them with a comma
                 List<String> columnValues = mapIndex.stream()
                         .map(index -> {
 
@@ -689,7 +792,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
             }
 
             case MATHEMATICAL -> {
-
+                // Extract column indices from the transformation expression
                 List<Integer> mapIndex = extractNumbersByPattern(transformationExpression);
 
                 List<Object> columnValues = new ArrayList<>();
@@ -700,6 +803,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                     Integer id = ruleDTO.getId();
                     Integer columnIndex = ruleDTO.getCol();
 
+                    // Retrieve and add column values for mathematical operations
                     Object columnValue = switch (id) {
                                 case 1 -> mainRecord.get(columnIndex);
                                 case 2 -> null != ref1Record ? ref1Record.get(columnIndex) : null;
@@ -714,6 +818,7 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 }
 
                 if(!columnValues.isEmpty()){
+                    // Replace placeholders in the expression and evaluate it
                     String replacedExpression = replacePlaceholders(transformationExpression, columnValues);
                     outputData = textHelper.evaluateExpression(replacedExpression);
                 }
@@ -726,15 +831,27 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     }
 
 
-
-    public static String replacePlaceholders(String expression, List<Object> values) {
+    /**
+     * Replaces placeholders in the given expression with corresponding values from the list.
+     * Placeholders in the format `<>>>N<<<>` are replaced, where `N` is the index of the value to be used.
+     *
+     * @param expression The string expression containing placeholders to be replaced.
+     * @param values The list of values to replace the placeholders with. The index of the placeholder corresponds to the index in this list.
+     * @return The expression with placeholders replaced by the corresponding values.
+     */
+    public static String replacePlaceholders(
+            String expression,
+            List<Object> values
+    ) {
+        // Define the pattern for placeholders in the format <>>>N<<<>
         String patternString = "<>>>\\d+<<<>";
         Pattern pattern = Pattern.compile(patternString);
         Matcher matcher = pattern.matcher(expression);
 
         StringBuilder result = new StringBuilder(expression);
-        int offset = 0; // to account for changes in the length of the string
+        int offset = 0; // Offset to adjust for changes in the length of the string during replacements
 
+        // Find all placeholders in the expression
         while (matcher.find()) {
             int start = matcher.start();
             int end = matcher.end();
@@ -755,7 +872,12 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-
+    /**
+     * Extracts numbers from a string expression that are enclosed in the format `<>>>(N)<<<>`.
+     *
+     * @param expression The string expression containing numbers enclosed in the format `<>>>(N)<<<>`.
+     * @return A list of integers extracted from the expression.
+     */
     public static List<Integer> extractNumbersByPattern(
             String expression
     ) {
@@ -766,8 +888,9 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
         Pattern pattern = Pattern.compile("<>>>(\\d+)<<<>");
         Matcher matcher = pattern.matcher(expression);
 
+        // Find and extract numbers
         while (matcher.find()) {
-            // Convert the extracted string to Long and add to the list
+            // Extract and convert the number to Integer, then add to the list
             numbers.add(Integer.parseInt(matcher.group(1)));
         }
 
@@ -776,14 +899,21 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
+    /**
+     * Extracts integers from a comma-separated string expression.
+     *
+     * @param expression The string expression containing numbers separated by commas.
+     * @return A list of integers extracted from the expression.
+     */
     public static List<Integer> extractNumbers(
             String expression
     ) {
-
         List<Integer> numbers = new ArrayList<>();
+        // Split the expression by commas
         String[] parts = expression.split(",");
 
         for (String part : parts) {
+            // Trim whitespace and convert to Integer
             numbers.add(Integer.parseInt(part.trim()));
         }
 
@@ -792,14 +922,33 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
+    /**
+     * Generates a random file name using a combination of a UUID and the current date.
+     *
+     * The file name is constructed as follows:
+     * - A shortened UUID (first 4 characters) without hyphens.
+     * - The current date formatted as "yyMMdd".
+     *
+     * @return A string representing the randomly generated file name.
+     */
     public static String generateRandomFileName() {
+        // Generate a UUID and remove hyphens
         String uuid = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 4);
+        // Get the current date formatted as "yyMMdd"
         String suffix = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMdd"));
+        // Concatenate UUID and date to form the file name
         return uuid + suffix;
     }
 
 
 
+    /**
+     * Signs in a user by validating their email and password, and issues a JWT token if authentication is successful.
+     *
+     * @param loginRequest Contains the user's email and password for authentication.
+     * @return A JwtTokenResponse containing the JWT token if authentication is successful.
+     * @throws BadCredentialsException if the email is not found or the password does not match the stored password.
+     */
     @Override
     @Transactional(
             isolation = Isolation.READ_COMMITTED,
@@ -808,17 +957,17 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
     public JwtTokenResponse signInUser(
             LoginRequest loginRequest
     ) {
-        // Sanitize input parameters
+        // Sanitize input parameters to prevent potential security issues
         String email = textHelper.sanitize(loginRequest.getEmail());
         String password = textHelper.sanitize(loginRequest.getPassword());
 
-        // Retrieve user model by email or user UID
+        // Retrieve the user model from the repository based on the sanitized email
         UserModel userModel = userRepository.findByEmail(email);
-        // Check if the user exists and the password matches
+        // Verify if the user exists and if the provided password matches the stored password
         if (null == userModel || !passwordEncoder.matches(password, userModel.getPassword()))
             throw new BadCredentialsException();
 
-        // Generate JWT token for the user
+        // Generate a JWT token for the authenticated user
         return JwtTokenResponse.builder()
                 .token(
                         jwtUtils.issueToken(
@@ -831,57 +980,68 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-
     /**
-     * Schedules a job to change the academic status of students.
+     * Schedules a job for report generation by creating a JobModel and saving it to the repository.
      *
-     * @param fileMap the map containing the FileType and their id respectively
-     * @throws NullPointerException if the fileMap is null
+     * @param fileMap A map of FileType to ListDTO containing the file information required for report generation.
+     * @param userModel The user who initiated the job scheduling.
+     * @throws InvalidDataException if there is an error in converting fileMap to JSON.
      */
     public void scheduleJobForReportGeneration(
             Map<FileType, ListDTO> fileMap,
             UserModel userModel
     ){
-
         // Ensure that the response is not null
         Objects.requireNonNull(fileMap);
 
         String jobData;
         try {
+            // Convert the fileMap to JSON string
             jobData = jsonConverter.convertMapToJsonString(fileMap);
         } catch (JsonProcessingException exception) {
+            // Throw an exception if there is an error in JSON processing
             throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
         }
 
+        // Retrieve the scheduling timing configuration for the job
         JobScheduleTimingModel jobScheduleTimingModel = jobScheduleTimingRepository.findByJobType(JobType.REPORT_GENERATOR);
 
         LocalTime localTime = jobScheduleTimingModel.getScheduleTime();
 
+        // Calculate the next schedule instant based on the retrieved local time
         Instant scheduleInstant = getNextScheduleInstant(localTime);
 
-        // Build the JobModel object
+        // Build a JobModel object with the necessary details
         JobModel job = JobModel.builder()
-                .jobUid(generateJobUid())
-                .name(JOB_NAME)
-                .description(JOB_DESCRIPTION)
-                .attempts(0)
-                .scheduleType(ScheduleType.ONCE)
-                .status(JobStatus.QUEUED)
-                .executeAt(scheduleInstant)
-                .jobType(JobType.REPORT_GENERATOR)
-                .jsonData(jobData)
-                .createdBy(userModel)
-                .lastModifiedBy(userModel)
+                .jobUid(generateJobUid())           // Generate a unique job identifier
+                .name(JOB_NAME)                     // Set the job name
+                .description(JOB_DESCRIPTION)       // Set the job description
+                .attempts(0)                        // Initialize the attempt counter
+                .scheduleType(ScheduleType.ONCE)    // Set the job to be scheduled only once
+                .status(JobStatus.QUEUED)           // Set the initial status of the job
+                .executeAt(scheduleInstant)         // Set the time at which the job should be executed
+                .jobType(JobType.REPORT_GENERATOR)  // Set the job type
+                .jsonData(jobData)                  // Attach the job data in JSON format
+                .createdBy(userModel)               // Set the user who created the job
+                .lastModifiedBy(userModel)          // Set the user who last modified the job
                 .build();
 
-        // Schedule the job using the job scheduler
+        // Save the job to the repository to schedule it
         jobRepository.save(job);
 
     }
 
 
 
+
+    /**
+     * Calculates the next scheduled instant based on the provided local time.
+     *
+     * @param localTime The time at which the job should be scheduled.
+     * @return An Instant representing the next schedule time in UTC.
+     */
     public static Instant getNextScheduleInstant(LocalTime localTime) {
+        // Get the current date and time
         LocalDate today = LocalDate.now();
         LocalTime now = LocalTime.now();
 
@@ -1101,7 +1261,36 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
                 .fileCategory(FileCategory.INPUT)
                 .build();
     }
-    
+
+
+    @Override
+    public APIResponse<?> updateSchedule(
+            LocalTime localTime,
+            TokenValidationResponse validationResponse
+    ) {
+
+        if(null == localTime)
+            throw new InvalidDataException("Please provide a valid schedule time.");
+
+        Optional<JobScheduleTimingModel> scheduleTimingModel = jobScheduleTimingRepository.findById(1L);
+
+        if(scheduleTimingModel.isPresent()){
+            scheduleTimingModel.get().setScheduleTime(localTime);
+            jobScheduleTimingRepository.save(scheduleTimingModel.get());
+        }else {
+            jobScheduleTimingRepository.save(
+                    JobScheduleTimingModel.builder()
+                            .jobType(JobType.REPORT_GENERATOR)
+                            .scheduleTime(LocalTime.of(16, 15)) // 18:00 IST / 12:30 as per UTC in db
+                            .build()
+            );
+        }
+
+        return APIResponse.builder()
+                .message("Schedule time updated successfully")
+                .build();
+    }
+
 
 
 }

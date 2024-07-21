@@ -7,11 +7,15 @@ import com.service.report.generator.dto.payload.LoginRequest;
 import com.service.report.generator.entity.JobModel;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalTime;
+
 public interface ReportGeneratorService {
 
     APIResponse<?> uploadFile(MultipartFile mainfile, MultipartFile reference1, MultipartFile reference2, TokenValidationResponse validationResponse);
     APIResponse<?> triggerReportGeneration(String jobId);
 
     JwtTokenResponse signInUser(LoginRequest loginRequest);
+
+    APIResponse<?> updateSchedule(LocalTime localTime, TokenValidationResponse validationResponse);
 
 }
