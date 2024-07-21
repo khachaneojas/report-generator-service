@@ -831,26 +831,6 @@ public class ReportGeneratorServiceImpl implements ReportGeneratorService{
 
 
 
-    @Override
-    public APIResponse<?> test() {
-        List<Object> values = List.of(5, 2, 3); // Example values
-
-        String pattern = "<>>>0<<<> + <>>>1<<<>";
-        try {
-            String replacedExpression = replacePlaceholders(pattern, values);
-            System.out.println("Replaced Expression: " + replacedExpression); // Output: 5 + 2 * 3
-
-            double result = textHelper.evaluateExpression(replacedExpression);
-            System.out.println("Evaluation Result: " + result); // Output: 11.0
-        } catch (Exception e) {
-            throw new InvalidDataException(ERROR_GENERIC_MESSAGE);
-        }
-
-        return null;
-    }
-
-
-
 
     /**
      * Schedules a job to change the academic status of students.

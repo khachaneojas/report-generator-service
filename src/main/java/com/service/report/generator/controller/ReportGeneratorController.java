@@ -91,17 +91,4 @@ public class ReportGeneratorController {
 
 
 
-    @PostMapping(path = "/test")
-    public ResponseEntity<?> test(){
-
-        APIResponse<?> response = reportGeneratorService.test();
-
-        return ResponseEntity
-                .status(HttpStatus.OK)
-                .body(response);
-    }
-
-
-
-
 }

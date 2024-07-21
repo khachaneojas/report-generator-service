@@ -14,5 +14,4 @@ public interface ReportGeneratorService {
 
     JwtTokenResponse signInUser(LoginRequest loginRequest);
 
-    APIResponse<?> test();
 }
